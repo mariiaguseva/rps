@@ -1,0 +1,247 @@
+import time
+import random
+import mysql.connector
+from mysql.connector import Error
+import json
+
+class DatabaseManager:
+    def __init__(self):
+        self.host = 'localhost'
+        self.database = 'array_sort_test'
+        self.user = 'root'
+        self.password = '1234'
+        self.connection = self.get_connection()
+
+    #соединение с базой данных
+    def get_connection(self):
+        try:
+            connection = mysql.connector.connect(
+                host=self.host,
+                database=self.database,
+                user=self.user,
+                password=self.password
+            )
+            return connection
+        except Error:
+            print(f"Ошибка подключения к MySQL: {Error}")
+            return None
+
+    #вставка неск массивов в бд
+    def insert_multiple_arrays(self, arrays):
+        try:
+            #курсор для выполнения скл запросов
+            cursor = self.connection.cursor()
+            #запрос скл для вставки данных
+            insert_query = "INSERT INTO arrays (array_data) VALUES (%s)"
+
+            #преобразовываем в джисон
+            arrays_json = [json.dumps(arr) for arr in arrays]
+
+            #массовое выполнение
+            cursor.executemany(insert_query, [(arr,) for arr in arrays_json])
+            #фиксация изменений
+            self.connection.commit()
+            cursor.close()
+            return True
+        except Error:
+            print(f"Ошибка массовой вставки массивов: {Error}")
+            return False
+
+    #случайные массивы из бд
+    def get_random_arrays(self, count):
+        try:
+            cursor = self.connection.cursor()
+            select_query = "SELECT array_data FROM arrays ORDER BY RAND() LIMIT %s"
+            cursor.execute(select_query, (count,))
+
+            results = cursor.fetchall()
+            #преобразование из джисон
+            arrays = [json.loads(row[0]) for row in results]
+            cursor.close()
+            return arrays
+        except Error:
+            print(f"Ошибка получения массивов: {Error}")
+            return []
+
+    #общее кол-во записей в бд
+    def get_total_count(self):
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute("SELECT COUNT(*) FROM arrays")
+            count = cursor.fetchone()[0]
+            cursor.close()
+            return count
+        except Error:
+            print(f"Ошибка получения количества записей: {Error}")
+            return 0
+
+    def clear_database(self):
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute("DELETE FROM arrays")
+            self.connection.commit()
+            cursor.close()
+            return True
+        except Error:
+            print(f"Ошибка очистки базы данных: {Error}")
+            return False
+
+    def close(self):
+        if self.connection and self.connection.is_connected():
+            self.connection.close()
+
+#генерация массива
+def generate_random_array(size, min_val=1, max_val=1000):
+    return [random.randint(min_val, max_val) for _ in range(size)]
+
+#генерация тестовых данных в бд
+def generate_test_data(db, count):
+    arrays = []
+    for i in range(count):
+        array_size = random.randint(10, 100)
+        arrays.append(generate_random_array(array_size))
+
+    #вставка массивов в базу данных
+    success = db.insert_multiple_arrays(arrays)
+    if success:
+        print(f"База заполнена: {db.get_total_count()} записей")
+    else:
+        print("Ошибка заполнения базы данных")
+    return success
+
+
+def test_insert_arrays():
+    print("\n1. ТЕСТ ДОБАВЛЕНИЯ МАССИВОВ")
+
+    db = DatabaseManager()
+    if not db.connection:
+        return
+
+    counts_to_test = [100, 1000, 10000]
+
+    for count in counts_to_test:
+        print(f"\n Тест добавления {count} массивов")
+
+        #генерация тестовых данных
+        arrays = []
+        for i in range(count):
+            array_size = random.randint(10, 100)
+            arrays.append(generate_random_array(array_size))
+
+        #тестирование вставки
+        start_time = time.time()
+        success = db.insert_multiple_arrays(arrays)
+        end_time = time.time()
+
+        execution_time = end_time - start_time
+
+        #проверка результата
+        if success:
+            actual_count = db.get_total_count()
+            status = "Успешно!" if actual_count >= count else "Неудачно"
+            print(f"Статус: {status}")
+            print(f"Время выполнения: {execution_time:.4f} секунд")
+        else:
+            print("Статус: Неудача")
+            print(f"Время выполнения: {execution_time:.4f} секунд")
+
+        #очистка перед следующим тестом
+        db.clear_database()
+
+    db.close()
+
+
+def test_select_and_sort():
+    print("\n2. ТЕСТ ВЫГРУЗКИ И СОРТИРОВКИ")
+
+    db = DatabaseManager()
+    if not db.connection:
+        return
+
+    record_counts = [100, 1000, 10000]
+    select_count = 100
+
+    for record_count in record_counts:
+        print(f"\nТест для базы с {record_count} записями")
+
+        #подготовка тестовых данных
+        if not generate_test_data(db, record_count):
+            continue
+
+        total_start_time = time.time()
+
+        arrays = db.get_random_arrays(select_count)
+
+
+        if not arrays:
+            print("Ошибка: не удалось получить массивы из базы")
+            db.clear_database()
+            continue
+
+        #сортировка каждого массива
+        sort_times = []
+
+        for arr in arrays:
+            start_sort = time.time()
+            sorted(arr)
+            end_sort = time.time()
+            sort_times.append(end_sort - start_sort)
+
+        #замер общего времени окончания операции
+        total_end_time = time.time()
+        total_time = total_end_time - total_start_time
+
+        print(f"Статус: Успешно!")
+        print(f"Общее время работы: {total_time:.4f} секунд")
+        print(f"Среднее время работы с 1 массивом: {sum(sort_times) / len(sort_times):.6f} секунд")
+
+        db.clear_database()
+
+    db.close()
+
+
+def test_cleanup_database():
+    print("\n3. ТЕСТ ОЧИСТКИ БАЗЫ ДАННЫХ")
+
+    db = DatabaseManager()
+    if not db.connection:
+        return
+
+    record_counts = [100, 1000, 10000]
+
+    for count in record_counts:
+        print(f"\nТест очистки для базы с {count} записями")
+
+        if not generate_test_data(db, count):
+            continue
+
+        start_time = time.time()
+        success = db.clear_database()
+        end_time = time.time()
+
+        execution_time = end_time - start_time
+        final_count = db.get_total_count()
+
+        if success and final_count == 0:
+            status = "Успешно!"
+        else:
+            status = "Неудачно"
+
+        print(f"Статус: {status}")
+        print(f"Время выполнения: {execution_time:.4f} секунд")
+
+    db.close()
+
+
+def run_all_tests():
+    print("ЗАПУСК ИНТЕГРАЦИОННЫХ ТЕСТОВ")
+
+    test_insert_arrays()
+    test_select_and_sort()
+    test_cleanup_database()
+
+    print("\nВСЕ ТЕСТЫ ЗАВЕРШЕНЫ")
+
+
+if __name__ == "__main__":
+    run_all_tests()
